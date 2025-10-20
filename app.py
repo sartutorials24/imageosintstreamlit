@@ -2,121 +2,91 @@ import streamlit as st
 from PIL import Image
 import pytesseract
 import exifread
-import io
 import base64
-import json
+import io
 
-st.set_page_config(page_title="SARPATH Image Extractor", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="SARPATH Image Intelligence", page_icon="🧠", layout="wide")
 
 st.markdown("""
-<style>
-body {
-    background-color: #0b1220;
-    color: #e6eef8;
-}
-h1, h2, h3 {
-    color: #60a5fa;
-}
-.stButton>button {
-    background-color: #10b981;
-    color: white;
-    border-radius: 8px;
-    border: none;
-    padding: 10px 16px;
-    font-weight: 600;
-}
-</style>
-""", unsafe_allow_html=True)
+# 🧠 SARPATH Image Intelligence Tool
+Upload an image to analyze its EXIF metadata, GPS location, OCR text, and get reverse image search links.
+""")
 
-st.title("🧠 SARPATH Image Extractor")
-st.write("Upload an image to extract metadata, GPS coordinates, OCR text, and access reverse image search links.")
+uploaded_file = st.file_uploader("📸 Upload an image", type=["jpg", "jpeg", "png"])
 
-uploaded_file = st.file_uploader("📸 Upload an image", type=["jpg", "jpeg", "png", "webp", "tiff"])
-
-if uploaded_file is not None:
-    # Load image
+if uploaded_file:
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-
-    # Save temp file for processing
-    temp_bytes = io.BytesIO(uploaded_file.getvalue())
-
-    # Extract EXIF using exifread
-    tags = exifread.process_file(temp_bytes, details=False)
-    exif_data = {tag: str(value) for tag, value in tags.items()}
-
+    st.image(image, caption="Uploaded Image", use_container_width=True)
+    
+    # Save temporarily
+    temp_bytes = io.BytesIO()
+    image.save(temp_bytes, format=image.format or "JPEG")
+    temp_bytes.seek(0)
+    
+    # === EXIF Extraction ===
     st.subheader("📷 EXIF Metadata")
-    if exif_data:
-        st.json(exif_data)
+    temp_bytes.seek(0)
+    tags = exifread.process_file(temp_bytes, details=False)
+    
+    if tags:
+        st.json({k: str(v) for k, v in tags.items()})
     else:
-        st.info("No EXIF metadata found.")
-
-    # GPS extraction
-    def convert_to_degress(value):
-        d = float(value.values[0].num) / float(value.values[0].den)
-        m = float(value.values[1].num) / float(value.values[1].den)
-        s = float(value.values[2].num) / float(value.values[2].den)
-        return d + (m / 60.0) + (s / 3600.0)
-
+        st.warning("No EXIF metadata found in this image.")
+    
+    # === GPS Extraction ===
+    def convert_to_degrees(value):
+        try:
+            d = float(value.values[0].num) / float(value.values[0].den)
+            m = float(value.values[1].num) / float(value.values[1].den)
+            s = float(value.values[2].num) / float(value.values[2].den)
+            return d + (m / 60.0) + (s / 3600.0)
+        except Exception:
+            return None
+    
     lat = lon = None
-    try:
-        gps_latitude = tags.get('GPS GPSLatitude')
-        gps_latitude_ref = tags.get('GPS GPSLatitudeRef')
-        gps_longitude = tags.get('GPS GPSLongitude')
-        gps_longitude_ref = tags.get('GPS GPSLongitudeRef')
-
-        if gps_latitude and gps_latitude_ref and gps_longitude and gps_longitude_ref:
-            lat = convert_to_degress(gps_latitude)
-            if gps_latitude_ref.values != 'N':
-                lat = -lat
-            lon = convert_to_degress(gps_longitude)
-            if gps_longitude_ref.values != 'E':
-                lon = -lon
-    except Exception:
-        pass
+    if "GPS GPSLatitude" in tags and "GPS GPSLongitude" in tags:
+        lat = convert_to_degrees(tags["GPS GPSLatitude"])
+        lon = convert_to_degrees(tags["GPS GPSLongitude"])
+        if "GPS GPSLatitudeRef" in tags and str(tags["GPS GPSLatitudeRef"]) != "N":
+            lat = -lat
+        if "GPS GPSLongitudeRef" in tags and str(tags["GPS GPSLongitudeRef"]) != "E":
+            lon = -lon
 
     if lat and lon:
-        st.subheader("🌍 GPS Coordinates Found")
-        st.write(f"**Latitude:** {lat}")
-        st.write(f"**Longitude:** {lon}")
-        st.markdown(f"[🌐 View on Google Maps](https://www.google.com/maps?q={lat},{lon})")
+        maps_link = f"https://www.google.com/maps?q={lat},{lon}"
+        st.success(f"✅ GPS Coordinates Found: {lat}, {lon}")
+        st.markdown(f"[🌍 View on Google Maps]({maps_link})")
     else:
-        st.warning("No GPS coordinates found in EXIF data.")
-
-    # OCR text extraction
-    st.subheader("📝 OCR (Text Extraction)")
+        st.error("❌ No GPS data found in this image.")
+    
+    # === OCR Extraction ===
+    st.subheader("🧠 OCR (Text Extraction)")
     try:
         ocr_text = pytesseract.image_to_string(image)
         if ocr_text.strip():
             st.text_area("Extracted Text", ocr_text, height=200)
         else:
-            st.info("No readable text detected in this image.")
+            st.warning("No text detected in the image.")
     except Exception as e:
-        st.error(f"OCR failed: {e}")
+        st.error(f"OCR Error: {e}")
 
-    # Generate reverse image search URLs using base64 inline encoding
-    img_bytes = uploaded_file.getvalue()
-    b64_img = base64.b64encode(img_bytes).decode('utf-8')
-    data_url = f"data:image/jpeg;base64,{b64_img}"
+    # === Reverse Image Search ===
+    st.subheader("🌐 Reverse Image Search")
+    # Encode image to base64
+    buffered = io.BytesIO()
+    image.save(buffered, format="JPEG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    img_data_uri = f"data:image/jpeg;base64,{img_str}"
 
-    st.subheader("🔎 Reverse Image Search")
-    st.markdown("""
-    To use reverse image search, please **download the file** and upload it manually to these engines:
-    """)
-
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown("Click below to search this image on popular reverse image engines:")
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.link_button("Google Images", "https://images.google.com/")
+        st.markdown(f"[🧭 Google Images](https://lens.google.com/uploadbyurl?url={img_data_uri})", unsafe_allow_html=True)
     with col2:
-        st.link_button("TinEye", "https://tineye.com/")
+        st.markdown(f"[🔎 TinEye](https://tineye.com/)", unsafe_allow_html=True)
     with col3:
-        st.link_button("Bing Visual Search", "https://www.bing.com/visualsearch")
-    with col4:
-        st.link_button("SauceNAO", "https://saucenao.com/")
-
-    st.download_button("💾 Download Uploaded Image", data=uploaded_file.getvalue(),
-                       file_name=uploaded_file.name, mime=uploaded_file.type)
-
+        st.markdown(f"[🪞 Bing Images](https://www.bing.com/images/trending)", unsafe_allow_html=True)
+    
     st.success("✅ Analysis Complete!")
 else:
-    st.info("Please upload an image to begin.")
+    st.info("👆 Upload an image to begin analysis.")
